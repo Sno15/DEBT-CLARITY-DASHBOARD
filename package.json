@@ -1,0 +1,15 @@
+{
+  "name": "debt-clarity",
+  "version": "1.0.0",
+  "description": "Debt Clarity - client intake dashboard for IVA / debt solution documentation and information gathering.",
+  "private": true,
+  "main": "server/app.js",
+  "scripts": {
+    "start": "node server/app.js",
+    "dev": "node --watch server/app.js"
+  },
+  "engines": {
+    "node": ">=22.5.0"
+  },
+  "license": "UNLICENSED"
+}

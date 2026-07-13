@@ -1,0 +1,38 @@
+services:
+  - type: web
+    name: debt-clarity
+    runtime: node
+    plan: free
+    buildCommand: npm install
+    startCommand: node server/app.js
+    envVars:
+      - key: HOST
+        value: 0.0.0.0
+      - key: DEBT_CLARITY_ENCRYPTION_KEY
+        sync: false
+
+# Notes for later, once you move off the free plan:
+#
+# The free plan has no persistent disk, so the database and any uploaded
+# documents are wiped every time the service restarts or redeploys — fine
+# for a first "does this deploy correctly" check, not for anything you want
+# to keep.
+#
+# When you're ready to upgrade to a paid plan (Starter or above) and want
+# data to actually persist, add a disk block here (or via the Render
+# dashboard) and point the app's two storage folders at it:
+#
+#   plan: starter
+#   disk:
+#     name: debt-clarity-data
+#     mountPath: /var/data
+#     sizeGB: 1
+#   envVars:
+#     - key: HOST
+#       value: 0.0.0.0
+#     - key: DEBT_CLARITY_ENCRYPTION_KEY
+#       sync: false
+#     - key: DEBT_CLARITY_DATA_DIR
+#       value: /var/data/appdata
+#     - key: DEBT_CLARITY_UPLOADS_DIR
+#       value: /var/data/uploads
