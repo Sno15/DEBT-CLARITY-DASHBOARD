@@ -772,12 +772,25 @@ function updateIeSummary() {
 /* ============================== Choose Solution ============================== */
 function renderChooseSolution() {
   const chosen = STATE.bundle.solution ? STATE.bundle.solution.solutionType : null;
+  const matches = STATE.bundle.solutionMatches || { hasEnoughData: false };
   return `
     <h1 class="page-title">Choose your solution</h1>
-    <p class="page-sub">Based on the information you've provided, here are the debt solutions available to you. Select the one you'd like to proceed with.</p>
+    <p class="page-sub">Here are the main debt solutions. You can pick any of them — the ones marked "May be worth discussing" are just a general pointer based on typical qualifying guidelines for your total debt and monthly budget, not a decision.</p>
+    ${matches.hasEnoughData ? `
+      <div class="solution-note">
+        These highlights are a general guide only, based on standard published qualifying criteria (your total debt, monthly disposable income, and any assets/property) — they are <strong>not</strong> a formal eligibility check or advice. Your case adviser will confirm what's actually right for you before anything is agreed.
+      </div>
+    ` : `
+      <div class="solution-note">
+        Once you've added your creditors and income &amp; spending figures, this page will highlight which solutions are typically worth discussing based on your numbers.
+      </div>
+    `}
     ${SOLUTIONS.map((s) => `
       <div class="solution-card ${chosen === s.key ? 'selected' : ''}" data-solution="${s.key}">
-        <h4>${escapeHtml(s.name)} ${chosen === s.key ? '✓' : ''}</h4>
+        <div class="solution-card-head">
+          <h4>${escapeHtml(s.name)} ${chosen === s.key ? '✓' : ''}</h4>
+          ${matches[s.key] ? '<span class="badge-match">May be worth discussing</span>' : ''}
+        </div>
         <p>${escapeHtml(s.desc)}</p>
       </div>
     `).join('')}
@@ -1122,9 +1135,13 @@ async function renderAdminApp() {
   if (caseDetailMatch) {
     const caseId = caseDetailMatch[1];
     try {
-      const bundle = await api(`/api/admin/cases/${caseId}`);
-      app.innerHTML = adminShellHtml(renderAdminCaseDetail(bundle));
-      wireAdminCaseDetailEvents(bundle);
+      const [bundle, notesResult, emailsResult] = await Promise.all([
+        api(`/api/admin/cases/${caseId}`),
+        api(`/api/admin/cases/${caseId}/notes`),
+        api(`/api/admin/cases/${caseId}/emails`),
+      ]);
+      app.innerHTML = adminShellHtml(renderAdminCaseDetail(bundle, notesResult.notes, emailsResult));
+      wireAdminCaseDetailEvents(bundle, notesResult.notes, emailsResult);
     } catch (err) {
       app.innerHTML = adminShellHtml(`<a class="back-link" href="#admin-cases">← Back to all cases</a><div class="card" style="margin-top:14px;">Couldn't load that case: ${escapeHtml(err.message)}</div>`);
     }
@@ -1143,9 +1160,7 @@ async function renderAdminApp() {
   STATE.adminCases = cases;
   app.innerHTML = adminShellHtml(renderAdminCasesList(cases));
   document.getElementById('logout-btn').addEventListener('click', logout);
-  document.querySelectorAll('.admin-case-row').forEach((row) => {
-    row.addEventListener('click', () => { location.hash = `#admin-case/${row.dataset.caseId}`; });
-  });
+  wireAdminCasesListEvents();
 }
 
 function renderAdminAuditLog(entries) {
@@ -1169,7 +1184,12 @@ function renderAdminCasesList(cases) {
   if (!cases.length) {
     return `<h1 class="page-title">All Cases</h1><p class="page-sub">No client cases yet. Once clients sign up and start their case, they'll show up here.</p>`;
   }
-  const rows = cases.map((c) => {
+  const filter = STATE.adminStatusFilter || 'all';
+  const visible = filter === 'all' ? cases : cases.filter((c) => (c.status || 'new') === filter);
+  const filterOptions = ['<option value="all">All statuses</option>']
+    .concat(CASE_STATUSES.map((s) => `<option value="${s.key}" ${filter === s.key ? 'selected' : ''}>${escapeHtml(s.label)}</option>`))
+    .join('');
+  const rows = visible.map((c) => {
     const allDone = c.completion.stage1Complete && c.completion.stage2Complete && c.completion.stage3Complete;
     const initials = (c.ownerName || c.ownerEmail || '?').trim().slice(0, 2).toUpperCase();
     return `
@@ -1180,15 +1200,37 @@ function renderAdminCasesList(cases) {
           <div class="item-detail">${escapeHtml(c.ownerEmail)}</div>
           <div class="item-detail">Information: ${c.completion.completedCount}/${c.completion.sectionCount} · Solution: ${c.completion.stage2Complete ? 'Chosen' : 'Not chosen'} · Documents: ${c.completion.stage3Complete ? 'Complete' : 'Incomplete'}</div>
         </div>
-        <div class="item-actions"><span class="status-chip ${allDone ? 'complete' : 'in-progress'}">${allDone ? 'COMPLETE' : 'IN PROGRESS'}</span></div>
+        <div class="item-actions" style="flex-direction:column;align-items:flex-end;gap:6px;">
+          <span class="status-chip workflow-${escapeHtml(c.status || 'new')}">${escapeHtml(caseStatusLabel(c.status || 'new'))}</span>
+          <span class="status-chip ${allDone ? 'complete' : 'in-progress'}">${allDone ? 'COMPLETE' : 'IN PROGRESS'}</span>
+        </div>
       </div>
     `;
   }).join('');
   return `
     <h1 class="page-title">All Cases</h1>
     <p class="page-sub">${cases.length} client case${cases.length === 1 ? '' : 's'}. Click a case to view its full details and documents.</p>
-    ${rows}
+    <div style="margin-bottom:14px;">
+      <select id="admin-status-filter" style="padding:8px 12px;border-radius:8px;border:1px solid var(--border);font-size:14px;">${filterOptions}</select>
+    </div>
+    <div id="admin-case-rows">${rows || '<div class="empty-state">No cases match that status.</div>'}</div>
   `;
+}
+
+function wireAdminCasesListEvents() {
+  document.querySelectorAll('.admin-case-row').forEach((row) => {
+    row.addEventListener('click', () => { location.hash = `#admin-case/${row.dataset.caseId}`; });
+  });
+  const filterSelect = document.getElementById('admin-status-filter');
+  if (filterSelect) {
+    filterSelect.addEventListener('change', () => {
+      STATE.adminStatusFilter = filterSelect.value;
+      const app = document.getElementById('app');
+      app.innerHTML = adminShellHtml(renderAdminCasesList(STATE.adminCases));
+      document.getElementById('logout-btn').addEventListener('click', logout);
+      wireAdminCasesListEvents();
+    });
+  }
 }
 
 function kvRow(label, value) {
@@ -1226,7 +1268,7 @@ function adminListSection(title, resourceKey, items, noneFlag) {
   return `<div class="section-heading">${escapeHtml(title)}</div>${body}`;
 }
 
-function renderAdminCaseDetail(bundle) {
+function renderAdminCaseDetail(bundle, notes, emailsResult) {
   const owner = bundle.owner || {};
   const c = bundle.completion;
   const p = bundle.personal || {};
@@ -1234,11 +1276,13 @@ function renderAdminCaseDetail(bundle) {
   const currentAddress = addresses.find((a) => a.is_current) || {};
   const prevAddresses = addresses.filter((a) => !a.is_current);
   const employment = bundle.employment || [];
+  notes = notes || [];
 
   const incomeRows = INCOME_GROUPS.flatMap((g) => g.items.filter((it) => bundle.incomeData[it.key]).map((it) => ({ label: it.label, val: bundle.incomeData[it.key] })));
   const expenditureRows = EXPENDITURE_GROUPS.flatMap((g) => g.items.filter((it) => bundle.expenditureData[it.key]).map((it) => ({ label: it.label, val: bundle.expenditureData[it.key] })));
 
   const solutionName = bundle.solution ? (SOLUTIONS.find((s) => s.key === bundle.solution.solutionType) || {}).name || bundle.solution.solutionType : null;
+  const statusOptions = CASE_STATUSES.map((s) => `<option value="${s.key}" ${bundle.case.status === s.key ? 'selected' : ''}>${escapeHtml(s.label)}</option>`).join('');
 
   return `
     <a class="back-link" href="#admin-cases">← Back to all cases</a>
@@ -1247,7 +1291,9 @@ function renderAdminCaseDetail(bundle) {
         <h1 class="page-title" style="margin-top:10px;">${escapeHtml(owner.name || 'Client')}</h1>
         <p class="page-sub">${escapeHtml(owner.email || '')} · Case ${escapeHtml(bundle.case.reference)} · Created ${new Date(bundle.case.created_at).toLocaleDateString('en-GB')}</p>
       </div>
-      <div style="display:flex;gap:8px;flex-shrink:0;">
+      <div style="display:flex;gap:8px;flex-shrink:0;align-items:center;flex-wrap:wrap;">
+        <select id="admin-status-select" style="padding:9px 12px;border-radius:8px;border:1px solid var(--border);font-size:14px;font-weight:600;">${statusOptions}</select>
+        <a class="btn btn-secondary" href="/api/admin/cases/${encodeURIComponent(bundle.case.id)}/proposal" target="_blank" rel="noopener">📄 Case Summary</a>
         <a class="btn btn-secondary" href="/api/admin/cases/${encodeURIComponent(bundle.case.id)}/export" download>⬇ Export (JSON)</a>
         <button type="button" class="btn btn-danger" id="admin-delete-case-btn">Delete case</button>
       </div>
@@ -1319,28 +1365,157 @@ function renderAdminCaseDetail(bundle) {
         return kvRowHtml(rd.label, html);
       }).join('')}
     </div>
+
+    <div class="card">
+      <div class="section-heading">Case Notes <span style="font-weight:400;font-size:13px;color:var(--ink-soft);">Internal — never shown to the client</span></div>
+      <textarea id="admin-note-text" rows="3" placeholder="Add a note for other advisers on this case…" style="width:100%;box-sizing:border-box;padding:10px 12px;border:1px solid var(--border);border-radius:8px;font-family:inherit;font-size:14px;resize:vertical;"></textarea>
+      <div style="margin-top:8px;"><button type="button" class="btn btn-primary" id="admin-add-note-btn">Add note</button></div>
+      ${renderCaseNotesList(notes)}
+    </div>
+
+    <div class="card">
+      <div class="section-heading">Client Communication <span style="font-weight:400;font-size:13px;color:var(--ink-soft);">Sent manually — nothing goes out automatically</span></div>
+      ${!owner.email ? '<div class="empty-state">This client has no email address on file.</div>' : `
+        <div style="display:flex;gap:10px;flex-wrap:wrap;">
+          <button type="button" class="btn btn-secondary" id="admin-send-thankyou-btn">✉ Send thank-you email</button>
+          <button type="button" class="btn btn-secondary" id="admin-send-reminder-btn">✉ Send reminder to continue</button>
+        </div>
+      `}
+      ${renderCaseEmailsList(emailsResult)}
+    </div>
   `;
 }
 
-function wireAdminCaseDetailEvents(bundle) {
-  const btn = document.getElementById('admin-delete-case-btn');
-  if (!btn) return;
-  btn.addEventListener('click', () => {
-    openModal({
-      title: `Delete case ${bundle.case.reference}`,
-      fields: [
-        { key: 'confirmReference', label: `Type the case reference (${bundle.case.reference}) to confirm`, required: true },
-      ],
-      initial: {},
-      submitLabel: 'Permanently delete this case',
-      onSubmit: async (values) => {
-        if (values.confirmReference !== bundle.case.reference) throw new Error('That reference doesn\'t match. Nothing was deleted.');
-        await api(`/api/admin/cases/${bundle.case.id}`, { method: 'DELETE', body: { confirmReference: values.confirmReference } });
-        location.hash = '#admin-cases';
-        STATE.route = 'admin-cases';
-        await renderAdminApp();
-        showToast('Case permanently deleted');
-      },
+function renderCaseEmailsList(emailsResult) {
+  const emails = (emailsResult && emailsResult.emails) || [];
+  const smtpConfigured = emailsResult ? emailsResult.smtpConfigured : true;
+  const warning = smtpConfigured ? '' : `
+    <div class="empty-state" style="margin-top:12px;">Email sending isn't set up on this server yet — see the README for how to connect Brevo. Attempts will still be logged below.</div>
+  `;
+  const labels = { thank_you: 'Thank-you email', reminder: 'Reminder to continue' };
+  const list = emails.length ? emails.map((e) => `
+    <div class="kv-row">
+      <span class="kv-label">${new Date(e.created_at).toLocaleString('en-GB')}</span>
+      <span class="kv-value" style="text-align:left;">${escapeHtml(labels[e.template] || e.template)} to ${escapeHtml(e.to_address)} — ${e.sentOk ? '<span style="color:var(--success, #1a7f4e);">Sent</span>' : `<span style="color:var(--danger);">Failed${e.error ? `: ${escapeHtml(e.error)}` : ''}</span>`}${e.sent_by_name ? ` <span style="color:var(--ink-soft);">· by ${escapeHtml(e.sent_by_name)}</span>` : ''}</span>
+    </div>
+  `).join('') : '<div class="empty-state">No emails sent yet.</div>';
+  return `<div id="admin-emails-section" style="margin-top:16px;">${list}${warning}</div>`;
+}
+
+function wireAdminCaseDetailEvents(bundle, notes, emailsResult) {
+  const deleteBtn = document.getElementById('admin-delete-case-btn');
+  if (deleteBtn) {
+    deleteBtn.addEventListener('click', () => {
+      openModal({
+        title: `Delete case ${bundle.case.reference}`,
+        fields: [
+          { key: 'confirmReference', label: `Type the case reference (${bundle.case.reference}) to confirm`, required: true },
+        ],
+        initial: {},
+        submitLabel: 'Permanently delete this case',
+        onSubmit: async (values) => {
+          if (values.confirmReference !== bundle.case.reference) throw new Error('That reference doesn\'t match. Nothing was deleted.');
+          await api(`/api/admin/cases/${bundle.case.id}`, { method: 'DELETE', body: { confirmReference: values.confirmReference } });
+          location.hash = '#admin-cases';
+          STATE.route = 'admin-cases';
+          await renderAdminApp();
+          showToast('Case permanently deleted');
+        },
+      });
+    });
+  }
+
+  const statusSelect = document.getElementById('admin-status-select');
+  if (statusSelect) {
+    statusSelect.addEventListener('change', async () => {
+      const previous = bundle.case.status;
+      try {
+        await api(`/api/admin/cases/${bundle.case.id}/status`, { method: 'PUT', body: { status: statusSelect.value } });
+        bundle.case.status = statusSelect.value;
+        showToast('Case status updated');
+      } catch (err) {
+        statusSelect.value = previous;
+        showToast(err.message || 'Could not update status');
+      }
+    });
+  }
+
+  const addNoteBtn = document.getElementById('admin-add-note-btn');
+  if (addNoteBtn) {
+    addNoteBtn.addEventListener('click', async () => {
+      const textarea = document.getElementById('admin-note-text');
+      const text = textarea.value.trim();
+      if (!text) return;
+      addNoteBtn.disabled = true;
+      try {
+        await api(`/api/admin/cases/${bundle.case.id}/notes`, { method: 'POST', body: { text } });
+        const fresh = await api(`/api/admin/cases/${bundle.case.id}/notes`);
+        const list = document.getElementById('admin-notes-list');
+        list.outerHTML = renderCaseNotesList(fresh.notes);
+        wireCaseNotesEvents(bundle);
+        textarea.value = '';
+        showToast('Note added');
+      } catch (err) {
+        showToast(err.message || 'Could not add note');
+      } finally {
+        addNoteBtn.disabled = false;
+      }
+    });
+  }
+
+  wireCaseNotesEvents(bundle);
+
+  async function sendCaseEmail(template, btn) {
+    btn.disabled = true;
+    try {
+      await api(`/api/admin/cases/${bundle.case.id}/send-email`, { method: 'POST', body: { template } });
+      showToast('Email sent');
+    } catch (err) {
+      showToast(err.message || 'Could not send email');
+    } finally {
+      btn.disabled = false;
+      try {
+        const fresh = await api(`/api/admin/cases/${bundle.case.id}/emails`);
+        const section = document.getElementById('admin-emails-section');
+        if (section) section.outerHTML = renderCaseEmailsList(fresh);
+      } catch (e) { /* history refresh is best-effort */ }
+    }
+  }
+
+  const thankYouBtn = document.getElementById('admin-send-thankyou-btn');
+  if (thankYouBtn) thankYouBtn.addEventListener('click', () => sendCaseEmail('thank_you', thankYouBtn));
+
+  const reminderBtn = document.getElementById('admin-send-reminder-btn');
+  if (reminderBtn) reminderBtn.addEventListener('click', () => sendCaseEmail('reminder', reminderBtn));
+}
+
+function renderCaseNotesList(notes) {
+  notes = notes || [];
+  return `
+    <div id="admin-notes-list" style="margin-top:16px;">
+      ${notes.length ? notes.map((n) => `
+        <div class="list-item" data-note-id="${n.id}">
+          <div class="item-body">
+            <div class="item-detail" style="margin-bottom:4px;"><strong>${escapeHtml(n.author_name || 'Adviser')}</strong> · ${new Date(n.created_at).toLocaleString('en-GB')}</div>
+            <div>${escapeHtml(n.body).replace(/\n/g, '<br>')}</div>
+          </div>
+          <div class="item-actions"><button type="button" class="btn-icon admin-delete-note-btn" data-note-id="${n.id}" title="Delete note">🗑</button></div>
+        </div>
+      `).join('') : '<div class="empty-state">No notes yet.</div>'}
+    </div>
+  `;
+}
+
+function wireCaseNotesEvents(bundle) {
+  document.querySelectorAll('.admin-delete-note-btn').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const noteId = btn.dataset.noteId;
+      await api(`/api/admin/cases/${bundle.case.id}/notes/${noteId}`, { method: 'DELETE' });
+      const fresh = await api(`/api/admin/cases/${bundle.case.id}/notes`);
+      const list = document.getElementById('admin-notes-list');
+      list.outerHTML = renderCaseNotesList(fresh.notes);
+      wireCaseNotesEvents(bundle);
+      showToast('Note deleted');
     });
   });
 }

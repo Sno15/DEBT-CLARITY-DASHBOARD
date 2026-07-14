@@ -308,13 +308,28 @@ input:disabled, select:disabled { background: #f2f1ed; color: var(--ink-soft); }
 .status-chip.not-started { background: #f2efe8; color: var(--ink-soft); }
 .status-chip.in-progress { background: var(--warn-bg); color: var(--warn-ink); }
 
+/* Adviser case workflow status — separate palette from the stage-completion chips above. */
+.status-chip.workflow-new { background: #eef1f6; color: #445; }
+.status-chip.workflow-awaiting_documents { background: var(--warn-bg); color: var(--warn-ink); }
+.status-chip.workflow-under_review { background: #e7ecfb; color: #33499b; }
+.status-chip.workflow-submitted_to_creditors { background: var(--brand-light); color: var(--brand-dark); }
+.status-chip.workflow-live { background: #e3f4ea; color: var(--success); }
+.status-chip.workflow-completed { background: #e3f4ea; color: var(--success); }
+.status-chip.workflow-failed { background: var(--danger-bg); color: var(--danger); }
+
 .solution-card {
   border: 2px solid var(--border); border-radius: var(--radius); padding: 20px; cursor: pointer; margin-bottom: 14px;
   background: var(--card);
 }
 .solution-card.selected { border-color: var(--brand); background: var(--brand-light); }
-.solution-card h4 { margin: 0 0 6px; }
+.solution-card .solution-card-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 6px; }
+.solution-card h4 { margin: 0; }
 .solution-card p { margin: 0; color: var(--ink-soft); font-size: 14px; }
+.badge-match { border: 1px solid var(--success); background: #e3f4ea; color: var(--success); border-radius: 999px; padding: 2px 12px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.solution-note {
+  background: var(--warn-bg); color: var(--warn-ink); border-radius: var(--radius);
+  padding: 14px 18px; margin-bottom: 18px; font-size: 13px; line-height: 1.5;
+}
 
 .footer-note { text-align: center; color: var(--ink-soft); font-size: 12px; padding: 14px; }
 

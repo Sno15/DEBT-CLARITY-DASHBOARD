@@ -10,7 +10,38 @@ services:
         value: 0.0.0.0
       - key: DEBT_CLARITY_ENCRYPTION_KEY
         sync: false
+      - key: BOOTSTRAP_ADMIN_EMAIL
+        sync: false
+      - key: BOOTSTRAP_ADMIN_PASSWORD
+        sync: false
+      - key: SMTP_HOST
+        value: smtp-relay.brevo.com
+      - key: SMTP_PORT
+        value: 465
+      - key: SMTP_USER
+        sync: false
+      - key: SMTP_PASS
+        sync: false
+      - key: MAIL_FROM_ADDRESS
+        sync: false
+      - key: MAIL_FROM_NAME
+        sync: false
 
+# SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / MAIL_FROM_ADDRESS /
+# MAIL_FROM_NAME: needed for the "Send thank-you email" / "Send reminder"
+# buttons on a case's admin page to actually deliver anything. SMTP_HOST and
+# SMTP_PORT are filled in above for Brevo's free relay — see the README's
+# "Setting up email sending" section for how to get SMTP_USER/SMTP_PASS from
+# a Brevo account and what to put for MAIL_FROM_ADDRESS. Leave all of these
+# blank if you don't want email sending yet — the buttons will just show a
+# clear "not set up" message instead of failing silently.
+#
+# BOOTSTRAP_ADMIN_EMAIL / BOOTSTRAP_ADMIN_PASSWORD: since there's no shell
+# access on hosts like this to run server/create-admin.js directly, set
+# these two so the app creates (or re-creates, after a restart) that admin
+# account automatically on startup. Optional — leave both blank if you don't
+# need one yet.
+#
 # Notes for later, once you move off the free plan:
 #
 # The free plan has no persistent disk, so the database and any uploaded

@@ -94,6 +94,20 @@ function monthsBetween(startMonth, startYear, endMonth, endYear) {
   return (Number(endYear) - Number(startYear)) * 12 + (eIdx - sIdx);
 }
 
+// Escapes text for safe embedding in server-generated HTML (e.g. the
+// proposal document) — the underlying data is client-supplied, so this
+// prevents a name/address/creditor field containing markup from being
+// executed when an adviser opens the generated page.
+function escapeHtml(value) {
+  if (value === null || value === undefined) return '';
+  return String(value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
 module.exports = {
   newId,
   sendJson,
@@ -104,4 +118,5 @@ module.exports = {
   readJsonBody,
   MONTHS,
   monthsBetween,
+  escapeHtml,
 };

@@ -109,6 +109,22 @@ const SOLUTIONS = [
   { key: 'bankruptcy', name: 'Bankruptcy', desc: 'A formal insolvency process that can clear most debts, subject to conditions on assets and income.' },
 ];
 
+// Internal adviser workflow status — keep this list in sync with
+// CASE_STATUSES in server/case-data.js (the server validates against its
+// own copy; this is just for rendering the dropdown/badges).
+const CASE_STATUSES = [
+  { key: 'new', label: 'New Lead' },
+  { key: 'awaiting_documents', label: 'Awaiting Documents' },
+  { key: 'under_review', label: 'Under Review' },
+  { key: 'submitted_to_creditors', label: 'Submitted to Creditors' },
+  { key: 'live', label: 'Live / Active' },
+  { key: 'completed', label: 'Completed' },
+  { key: 'failed', label: 'Failed / Terminated' },
+];
+function caseStatusLabel(key) {
+  return (CASE_STATUSES.find((s) => s.key === key) || {}).label || key;
+}
+
 const SECTION_ORDER = [
   { key: 'personal', label: 'Personal', icon: 'PE' },
   { key: 'address', label: 'Address', icon: 'AD' },
@@ -132,4 +148,12 @@ const COMPLETION_KEY = {
 function currency(n) {
   const num = Number(n) || 0;
   return '£' + num.toLocaleString('en-GB', { minimumFractionDigits: num % 1 === 0 ? 0 : 2, maximumFractionDigits: 2 });
+}
+
+// This file is loaded via a plain <script> tag in the browser (no bundler),
+// so it just defines globals there. The proposal generator (server/proposal.js)
+// also needs the income/expenditure group labels and solution list, so this
+// makes the same file requireable from Node without affecting the browser.
+if (typeof module !== 'undefined' && module.exports) {
+  module.exports = { INCOME_GROUPS, EXPENDITURE_GROUPS, SOLUTIONS, currency };
 }

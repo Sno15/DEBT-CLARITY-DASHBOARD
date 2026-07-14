@@ -24,8 +24,36 @@ CREATE TABLE IF NOT EXISTS cases (
   id TEXT PRIMARY KEY,
   user_id TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   reference TEXT UNIQUE NOT NULL,
+  status TEXT NOT NULL DEFAULT 'new',
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS case_notes (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  author_user_id TEXT,
+  author_name TEXT,
+  body TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+-- A log of client-facing emails an adviser has manually sent from a case
+-- (thank-you notes, "keep going" reminders). Always adviser-initiated —
+-- there is no automatic/scheduled sending anywhere in this app. Kept mainly
+-- so an adviser can see at a glance whether/when someone last reached out,
+-- to avoid duplicate or over-frequent contact.
+CREATE TABLE IF NOT EXISTS case_emails (
+  id TEXT PRIMARY KEY,
+  case_id TEXT NOT NULL REFERENCES cases(id) ON DELETE CASCADE,
+  template TEXT NOT NULL,
+  to_address TEXT NOT NULL,
+  subject TEXT NOT NULL,
+  sent_ok INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  sent_by_user_id TEXT,
+  sent_by_name TEXT,
+  created_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS personal (
@@ -185,9 +213,15 @@ CREATE TABLE IF NOT EXISTS audit_log (
 );
 `);
 
-// Idempotent migration for databases created before the 'role' column existed.
+// Idempotent migrations for databases created before these columns existed.
 try {
   db.exec("ALTER TABLE users ADD COLUMN role TEXT NOT NULL DEFAULT 'client';");
+} catch (err) {
+  if (!/duplicate column/i.test(err.message)) throw err;
+}
+
+try {
+  db.exec("ALTER TABLE cases ADD COLUMN status TEXT NOT NULL DEFAULT 'new';");
 } catch (err) {
   if (!/duplicate column/i.test(err.message)) throw err;
 }

@@ -22,6 +22,23 @@ database as they go.
   list (name, email, reference, how far along each stage is) and lets you click into
   any case to see all the details they've entered plus their uploaded documents. See
   "Setting up your own advisor login" below.
+- **Case workflow status** — advisers can move a case through internal stages (New
+  Lead, Awaiting Documents, Under Review, Submitted to Creditors, Live/Active,
+  Completed, Failed/Terminated) from a dropdown on the case page. This is
+  adviser-only and never shown to the client.
+- **Case notes** — a private, encrypted notes thread on each case for advisers to
+  leave context for one another. Never visible to, or exported for, the client.
+- **Draft Case Summary / proposal generator** — a "Case Summary" button on each case
+  produces a printable document compiling everything the client has entered
+  (statement of affairs, creditor schedule, assets, chosen solution) as a starting
+  point for a formal proposal. It's explicitly a draft compilation aid, not a
+  submission-ready legal document — see the disclaimer built into the document
+  itself.
+- **Client communication (manual)** — a "Client Communication" section on each case
+  lets an adviser send a calm, low-pressure thank-you email or a "keep going"
+  reminder email to the client with one click. Nothing is ever sent automatically or
+  on a schedule — every email is a deliberate choice by an adviser, and every attempt
+  (sent or failed) is logged on the case. See "Setting up email sending" below.
 
 ## Setting up your own advisor login
 
@@ -43,6 +60,60 @@ Run it once (with the server stopped or running, it doesn't matter), then log in
 instead of a client dashboard. You can run the same command again later with a
 different email to create more advisor logins, or with an existing client's email to
 promote them to admin instead (not usually what you want, but the option's there).
+
+## Setting up email sending (Brevo)
+
+The "Send thank-you email" and "Send reminder to continue" buttons on a case page
+need somewhere to actually send email through. Without this set up, the buttons still
+work but will show a clear "not set up yet" message instead of sending anything — so
+it's safe to skip this section entirely if you don't need email yet.
+
+**Brevo** is recommended: it's free for up to 300 emails/day (9,000/month), which is
+comfortably enough for this kind of use, and doesn't require a credit card to start.
+
+**1. Create a Brevo account and verify a sender**:
+- Sign up at brevo.com (the free plan is fine).
+- Go to **Senders, Domains & Dedicated IPs** → **Senders**, and add the email address
+  you want client emails to appear to come from (e.g.
+  `no-reply@phoenixinsolvency.co.uk`, or your own business email address). Brevo will
+  send a verification email to that address — click the link in it to confirm you own
+  it. Until this step is done, Brevo will refuse to send anything from that address.
+
+**2. Get your SMTP credentials**:
+- In Brevo, go to **SMTP & API** (usually under your account/settings menu). You'll
+  see an **SMTP** tab with a host (`smtp-relay.brevo.com`), a port, and an **SMTP
+  login** (usually your Brevo account email). If you don't already have an **SMTP
+  key/password** listed, click to generate one — this is different from your normal
+  Brevo login password, so keep a copy of it somewhere safe (like a password manager)
+  as it's shown in full only once.
+
+**3. Add the environment variables**:
+
+On Render, add these on the service's **Environment** tab (the `render.yaml` in this
+project already lists them, so a Blueprint deploy will prompt you to fill in the ones
+marked "sync: false"):
+
+```
+SMTP_HOST=smtp-relay.brevo.com
+SMTP_PORT=465
+SMTP_USER=<your Brevo SMTP login>
+SMTP_PASS=<your Brevo SMTP key>
+MAIL_FROM_ADDRESS=<the address you verified in step 1>
+MAIL_FROM_NAME=Phoenix Insolvency
+```
+
+Running locally instead, set the same variables before starting the app, e.g. on
+Windows PowerShell:
+
+```powershell
+$env:SMTP_HOST="smtp-relay.brevo.com"; $env:SMTP_PORT="465"; $env:SMTP_USER="..."; $env:SMTP_PASS="..."; $env:MAIL_FROM_ADDRESS="..."; node server/app.js
+```
+
+Once these are set (and the server restarted, if it was already running), the two
+buttons on a case's page will send real emails and log the result underneath. If
+something's wrong (wrong password, unverified sender, etc.) the attempt will fail with
+a clear error message shown right there, and it's recorded in the case's email history
+so you can see exactly what happened and when.
 
 ## Tech choices — and why there are zero npm dependencies
 
@@ -169,6 +240,12 @@ server/
   resources.js      — generic CRUD for list-style data (creditors, vehicles, etc.)
   case-data.js      — case data access + completion/progress calculations
   create-admin.js   — CLI script to create/promote an advisor login
+  admin-setup.js    — shared admin-account logic + env-var bootstrap for hosts with
+                       no shell access (e.g. Render's free plan)
+  proposal.js        — generates the printable "Draft Case Summary" document
+  mailer.js           — hand-rolled SMTP client used to actually send emails
+  email-templates.js  — copy for the thank-you/reminder emails
+  firm-config.js       — shared firm display name (used by proposal.js and mailer.js)
 public/
   index.html        — single HTML shell
   css/styles.css    — all styling
@@ -178,6 +255,9 @@ test/
   e2e.js               — Playwright walkthrough of the full client flow
   e2e-admin.js         — Playwright walkthrough of the admin/advisor view
   e2e-security-ui.js   — Playwright walkthrough of Privacy/Data and admin export/delete/audit log
+  e2e-comms.js         — Playwright walkthrough of the manual email-sending buttons
+  mock-smtp-test.js    — unit test for mailer.js's SMTP conversation, no real network needed
+  mock-smtp-server.js  — a throwaway local SMTP server for manual testing
 ```
 
 ## Extending it

@@ -1,9 +1,23 @@
 'use strict';
 
 const db = require('./db');
-const { monthsBetween } = require('./util');
+const { monthsBetween, newId } = require('./util');
 const { listResource } = require('./resources');
 const { encryptString, decryptString } = require('./security');
+
+// Internal adviser workflow status for a case — separate from the client-
+// facing stage-completion tracking. Only advisers (admin role) can change
+// this; it's shown in the "All Cases" list and on the case detail page.
+const CASE_STATUSES = [
+  { key: 'new', label: 'New Lead' },
+  { key: 'awaiting_documents', label: 'Awaiting Documents' },
+  { key: 'under_review', label: 'Under Review' },
+  { key: 'submitted_to_creditors', label: 'Submitted to Creditors' },
+  { key: 'live', label: 'Live / Active' },
+  { key: 'completed', label: 'Completed' },
+  { key: 'failed', label: 'Failed / Terminated' },
+];
+const CASE_STATUS_KEYS = CASE_STATUSES.map((s) => s.key);
 
 // Personal-details columns sensitive enough to encrypt at rest (National
 // Insurance number, date of birth, phone numbers). Name/title/marital
@@ -245,6 +259,62 @@ function computeCompletion(caseId) {
   };
 }
 
+// Indicative, non-binding pointers towards which debt solutions a case's
+// figures typically fit — based on the general England & Wales qualifying
+// guidelines for each route (see README for sources/figures used). This is
+// deliberately a soft "worth discussing" signal, not a determination: every
+// solution stays selectable regardless, and the UI must always show these
+// as suggestions for an adviser to confirm, never as an automatic decision.
+//
+// Figures used (check periodically — these change over time):
+//   DRO:   total qualifying debt < £50,000, disposable income <= £75/month,
+//          non-exempt assets < £2,000 (one vehicle up to £4,000 disregarded),
+//          no equity in property.
+//   IVA:   total debt >= £10,000, disposable income >= £100/month,
+//          debts owed to 2+ creditors.
+//   DMP:   informal, no fixed thresholds — a reasonable fit whenever there's
+//          some positive disposable income to offer creditors.
+//   Bankruptcy: no fixed threshold either — flagged as worth discussing when
+//          neither DRO nor IVA fit and there's no spare income for a DMP.
+function computeSolutionMatches(caseId) {
+  const creditors = listResource('creditors', caseId);
+  const properties = listResource('properties', caseId);
+  const vehicles = listResource('vehicles', caseId);
+  const assets = listResource('assets', caseId);
+  const { incomeData, expenditureData } = getIncomeExpenditure(caseId);
+
+  const totalDebt = creditors.reduce((s, c) => s + (Number(c.balance) || 0), 0);
+  const incomeTotal = Object.values(incomeData || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+  const expenditureTotal = Object.values(expenditureData || {}).reduce((s, v) => s + (Number(v) || 0), 0);
+  const disposableIncome = incomeTotal - expenditureTotal;
+
+  if (creditors.length === 0) {
+    return { hasEnoughData: false, dro: false, iva: false, dmp: false, bankruptcy: false };
+  }
+
+  // One vehicle up to £4,000 is disregarded for DRO purposes; only the
+  // excess above that (and any further vehicles) counts as an asset.
+  const vehicleValues = vehicles.map((v) => Number(v.value) || 0).sort((a, b) => b - a);
+  const vehicleAssetTotal = vehicleValues.reduce((sum, val, i) => sum + (i === 0 ? Math.max(0, val - 4000) : val), 0);
+  const otherAssetTotal = assets.reduce((s, a) => s + (Number(a.estimated_value) || 0), 0);
+  const droAssetTotal = vehicleAssetTotal + otherAssetTotal;
+  const propertyEquity = properties.reduce((s, p) => s + Math.max(0, (Number(p.value) || 0) - (Number(p.mortgage_balance) || 0)), 0);
+
+  const dro = totalDebt > 0 && totalDebt < 50000 && disposableIncome <= 75 && droAssetTotal < 2000 && propertyEquity <= 0;
+  const iva = totalDebt >= 10000 && disposableIncome >= 100 && creditors.length >= 2;
+  const dmp = disposableIncome > 0;
+  const bankruptcy = !dro && !iva && disposableIncome <= 0;
+
+  return {
+    hasEnoughData: true,
+    dro,
+    iva,
+    dmp,
+    bankruptcy,
+    figures: { totalDebt, disposableIncome, droAssetTotal, propertyEquity, creditorCount: creditors.length },
+  };
+}
+
 function getCaseOwner(caseId) {
   return db.prepare(`
     SELECT users.id, users.name, users.email, users.role FROM users
@@ -258,7 +328,7 @@ function listAllCasesForAdmin() {
   // a case of their own (create-admin.js cleans these up at promotion time),
   // but this filter is a second line of defence in case one ever lingers.
   const rows = db.prepare(`
-    SELECT cases.id AS case_id, cases.reference, cases.created_at, cases.updated_at,
+    SELECT cases.id AS case_id, cases.reference, cases.status, cases.created_at, cases.updated_at,
            users.name AS owner_name, users.email AS owner_email
     FROM cases
     JOIN users ON users.id = cases.user_id
@@ -271,6 +341,7 @@ function listAllCasesForAdmin() {
     return {
       caseId: row.case_id,
       reference: row.reference,
+      status: row.status || 'new',
       createdAt: row.created_at,
       updatedAt: row.updated_at,
       ownerName: row.owner_name,
@@ -278,6 +349,50 @@ function listAllCasesForAdmin() {
       completion,
     };
   });
+}
+
+// ---------- Case workflow status (adviser-only) ----------
+function setCaseStatus(caseId, status) {
+  if (!CASE_STATUS_KEYS.includes(status)) {
+    throw new Error(`Invalid case status: ${status}`);
+  }
+  db.prepare('UPDATE cases SET status = ?, updated_at = ? WHERE id = ?')
+    .run(status, new Date().toISOString(), caseId);
+  return getCaseById(caseId);
+}
+
+// ---------- Case notes (adviser-only, encrypted at rest) ----------
+function addCaseNote(caseId, authorUserId, authorName, text) {
+  const id = newId();
+  const createdAt = new Date().toISOString();
+  db.prepare('INSERT INTO case_notes (id, case_id, author_user_id, author_name, body, created_at) VALUES (?,?,?,?,?,?)')
+    .run(id, caseId, authorUserId, authorName || null, encryptString(text), createdAt);
+  return { id, caseId, authorUserId, authorName, body: text, createdAt };
+}
+
+function getCaseNotes(caseId) {
+  const rows = db.prepare('SELECT * FROM case_notes WHERE case_id = ? ORDER BY created_at DESC').all(caseId);
+  return rows.map((r) => ({ ...r, body: decryptString(r.body) }));
+}
+
+function deleteCaseNote(noteId) {
+  db.prepare('DELETE FROM case_notes WHERE id = ?').run(noteId);
+}
+
+// ---------- Case emails (adviser-initiated only — never automatic) ----------
+function logCaseEmail(caseId, { template, toAddress, subject, sentOk, error, sentByUserId, sentByName }) {
+  const id = newId();
+  const createdAt = new Date().toISOString();
+  db.prepare(`
+    INSERT INTO case_emails (id, case_id, template, to_address, subject, sent_ok, error, sent_by_user_id, sent_by_name, created_at)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
+  `).run(id, caseId, template, toAddress, subject, sentOk ? 1 : 0, error || null, sentByUserId || null, sentByName || null, createdAt);
+  return { id, caseId, template, toAddress, subject, sentOk: !!sentOk, error: error || null, sentByName: sentByName || null, createdAt };
+}
+
+function getCaseEmails(caseId) {
+  const rows = db.prepare('SELECT * FROM case_emails WHERE case_id = ? ORDER BY created_at DESC').all(caseId);
+  return rows.map((r) => ({ ...r, sentOk: !!r.sent_ok }));
 }
 
 function getFullCase(caseId) {
@@ -298,6 +413,7 @@ function getFullCase(caseId) {
   const solution = getSolution(caseId);
   const documents = getDocuments(caseId);
   const completion = computeCompletion(caseId);
+  const solutionMatches = computeSolutionMatches(caseId);
 
   return {
     case: kase,
@@ -319,6 +435,7 @@ function getFullCase(caseId) {
     documents,
     requiredDocumentTypes: REQUIRED_DOCUMENT_TYPES,
     completion,
+    solutionMatches,
   };
 }
 
@@ -352,6 +469,7 @@ module.exports = {
   setSolution,
   getDocuments,
   computeCompletion,
+  computeSolutionMatches,
   getFullCase,
   getCaseOwner,
   listAllCasesForAdmin,
@@ -359,4 +477,11 @@ module.exports = {
   deleteCaseCompletely,
   deleteUserAccount,
   REQUIRED_DOCUMENT_TYPES,
+  CASE_STATUSES,
+  setCaseStatus,
+  addCaseNote,
+  getCaseNotes,
+  deleteCaseNote,
+  logCaseEmail,
+  getCaseEmails,
 };

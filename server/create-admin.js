@@ -15,58 +15,21 @@
 // promotion (see removeAnyExistingCase below) — an admin account should
 // never itself appear in the case list.
 
-const path = require('path');
-const fs = require('fs');
 const readline = require('node:readline/promises');
 const { stdin, stdout } = require('node:process');
 
-const db = require('./db');
-const { hashPassword } = require('./auth');
-const { newId } = require('./util');
-const caseData = require('./case-data');
-
-const { UPLOADS_DIR } = require('./paths');
-
-// If this user already has a client case attached (e.g. the email was used
-// to test the client sign-up flow before being promoted to admin), remove
-// that case and its uploaded files. An admin account should never carry a
-// case of its own — otherwise it shows up, confusingly, in that admin's own
-// "All Cases" list.
-function removeAnyExistingCase(userId) {
-  const existingCase = caseData.getCaseByUser(userId);
-  if (!existingCase) return null;
-  const storedNames = caseData.getStoredDocumentNames(existingCase.id);
-  caseData.deleteCaseCompletely(existingCase.id);
-  storedNames.forEach((name) => {
-    const p = path.join(UPLOADS_DIR, existingCase.id, name);
-    if (fs.existsSync(p)) fs.unlinkSync(p);
-  });
-  const caseDir = path.join(UPLOADS_DIR, existingCase.id);
-  if (fs.existsSync(caseDir)) fs.rmSync(caseDir, { recursive: true, force: true });
-  return existingCase.reference;
-}
+const { createOrPromoteAdmin: createOrPromoteAdminCore } = require('./admin-setup');
 
 function createOrPromoteAdmin(email, password, name) {
-  const normalizedEmail = email.toLowerCase().trim();
-  const existing = db.prepare('SELECT * FROM users WHERE email = ?').get(normalizedEmail);
-
-  if (existing) {
-    const { hash, salt } = hashPassword(password);
-    db.prepare("UPDATE users SET role = 'admin', password_hash = ?, salt = ?, name = COALESCE(?, name) WHERE id = ?")
-      .run(hash, salt, name || null, existing.id);
-    console.log(`\nExisting account ${normalizedEmail} has been promoted to admin and its password updated.`);
-    const removedReference = removeAnyExistingCase(existing.id);
-    if (removedReference) {
-      console.log(`Note: this email had a client case attached (${removedReference}) from before — that test case and any documents on it have been removed, since admin accounts don't carry a case of their own.`);
-    }
+  const result = createOrPromoteAdminCore(email, password, name);
+  if (result.created) {
+    console.log(`\nAdmin account created for ${result.normalizedEmail}.`);
   } else {
-    const { hash, salt } = hashPassword(password);
-    const id = newId();
-    db.prepare("INSERT INTO users (id, email, password_hash, salt, name, role, created_at) VALUES (?,?,?,?,?,'admin',?)")
-      .run(id, normalizedEmail, hash, salt, name || null, new Date().toISOString());
-    console.log(`\nAdmin account created for ${normalizedEmail}.`);
+    console.log(`\nExisting account ${result.normalizedEmail} has been promoted to admin and its password updated.`);
+    if (result.removedReference) {
+      console.log(`Note: this email had a client case attached (${result.removedReference}) from before — that test case and any documents on it have been removed, since admin accounts don't carry a case of their own.`);
+    }
   }
-
   console.log('You can now log in at http://localhost:3000 with this email and password to see the "All Cases" admin view.');
 }
 

@@ -17,6 +17,10 @@ const caseData = require('./case-data');
 const { parseMultipart } = require('./multipart');
 const security = require('./security');
 const audit = require('./audit');
+const proposal = require('./proposal');
+const mailer = require('./mailer');
+const emailTemplates = require('./email-templates');
+const { maybeBootstrapAdminFromEnv } = require('./admin-setup');
 
 const PORT = process.env.PORT || 3000;
 // Bind to localhost only by default — see README "Network access" section
@@ -24,6 +28,11 @@ const PORT = process.env.PORT || 3000;
 const HOST = process.env.HOST || '127.0.0.1';
 const PUBLIC_DIR = path.join(__dirname, '..', 'public');
 const { UPLOADS_DIR } = require('./paths');
+
+// On hosts with no shell access to run create-admin.js (e.g. Render's free
+// plan), setting BOOTSTRAP_ADMIN_EMAIL and BOOTSTRAP_ADMIN_PASSWORD as
+// environment variables gets you an admin login automatically on startup.
+maybeBootstrapAdminFromEnv();
 
 function requireAuth(req, res) {
   const userId = getUserIdFromRequest(req);
@@ -217,6 +226,105 @@ async function handleApi(req, res, pathname, query, ip) {
       audit.logEvent({ actorUserId: adminUser.id, actorEmail: adminUser.email, actorRole: 'admin', action: 'admin_view_document', caseId: targetCaseId, detail: doc.doc_type, ip });
       streamEncryptedFile(res, filePath, doc.mime_type, doc.original_name);
       return;
+    }
+
+    if (pathname === '/api/admin/case-statuses' && req.method === 'GET') {
+      return sendJson(res, 200, { statuses: caseData.CASE_STATUSES });
+    }
+
+    const adminStatusMatch = pathname.match(/^\/api\/admin\/cases\/([a-f0-9]+)\/status$/);
+    if (adminStatusMatch && req.method === 'PUT') {
+      const targetCaseId = adminStatusMatch[1];
+      if (!caseData.getCaseById(targetCaseId)) return sendError(res, 404, 'Case not found');
+      const body = await readJsonBody(req).catch(() => ({}));
+      let updated;
+      try {
+        updated = caseData.setCaseStatus(targetCaseId, body.status);
+      } catch (err) {
+        return sendError(res, 400, err.message);
+      }
+      audit.logEvent({ actorUserId: adminUser.id, actorEmail: adminUser.email, actorRole: 'admin', action: 'admin_update_status', caseId: targetCaseId, detail: body.status, ip });
+      return sendJson(res, 200, { case: updated });
+    }
+
+    const adminNotesMatch = pathname.match(/^\/api\/admin\/cases\/([a-f0-9]+)\/notes$/);
+    if (adminNotesMatch && req.method === 'GET') {
+      const targetCaseId = adminNotesMatch[1];
+      if (!caseData.getCaseById(targetCaseId)) return sendError(res, 404, 'Case not found');
+      return sendJson(res, 200, { notes: caseData.getCaseNotes(targetCaseId) });
+    }
+
+    if (adminNotesMatch && req.method === 'POST') {
+      const targetCaseId = adminNotesMatch[1];
+      if (!caseData.getCaseById(targetCaseId)) return sendError(res, 404, 'Case not found');
+      const body = await readJsonBody(req).catch(() => ({}));
+      const text = (body.text || '').trim();
+      if (!text) return sendError(res, 400, 'Note text is required');
+      if (text.length > 5000) return sendError(res, 400, 'Note is too long (max 5000 characters)');
+      const note = caseData.addCaseNote(targetCaseId, adminUser.id, adminUser.name || adminUser.email, text);
+      audit.logEvent({ actorUserId: adminUser.id, actorEmail: adminUser.email, actorRole: 'admin', action: 'admin_add_note', caseId: targetCaseId, ip });
+      return sendJson(res, 200, { note });
+    }
+
+    const adminNoteDeleteMatch = pathname.match(/^\/api\/admin\/cases\/([a-f0-9]+)\/notes\/([a-f0-9]+)$/);
+    if (adminNoteDeleteMatch && req.method === 'DELETE') {
+      const [, targetCaseId, noteId] = adminNoteDeleteMatch;
+      if (!caseData.getCaseById(targetCaseId)) return sendError(res, 404, 'Case not found');
+      caseData.deleteCaseNote(noteId);
+      audit.logEvent({ actorUserId: adminUser.id, actorEmail: adminUser.email, actorRole: 'admin', action: 'admin_delete_note', caseId: targetCaseId, ip });
+      return sendJson(res, 200, { ok: true });
+    }
+
+    const adminEmailsMatch = pathname.match(/^\/api\/admin\/cases\/([a-f0-9]+)\/emails$/);
+    if (adminEmailsMatch && req.method === 'GET') {
+      const targetCaseId = adminEmailsMatch[1];
+      if (!caseData.getCaseById(targetCaseId)) return sendError(res, 404, 'Case not found');
+      return sendJson(res, 200, { emails: caseData.getCaseEmails(targetCaseId), smtpConfigured: mailer.isConfigured() });
+    }
+
+    const adminSendEmailMatch = pathname.match(/^\/api\/admin\/cases\/([a-f0-9]+)\/send-email$/);
+    if (adminSendEmailMatch && req.method === 'POST') {
+      const targetCaseId = adminSendEmailMatch[1];
+      const bundle = caseData.getFullCase(targetCaseId);
+      if (!bundle.case) return sendError(res, 404, 'Case not found');
+      const body = await readJsonBody(req).catch(() => ({}));
+      const templateKey = body.template;
+      const templateDef = emailTemplates.TEMPLATES[templateKey];
+      if (!templateDef) return sendError(res, 400, 'Unknown email template');
+      if (!bundle.owner || !bundle.owner.email) return sendError(res, 400, 'This client has no email address on file');
+
+      const { toAddress, toName, subject, text } = templateDef.build(bundle);
+      let sentOk = false;
+      let errorMessage = null;
+      try {
+        const result = await mailer.sendMail({ toAddress, toName, subject, text });
+        if (result.sent) {
+          sentOk = true;
+        } else {
+          errorMessage = 'SMTP is not configured on this server yet — see the README for setting up email sending.';
+        }
+      } catch (err) {
+        errorMessage = err.message || 'Failed to send email';
+      }
+
+      const logEntry = caseData.logCaseEmail(targetCaseId, {
+        template: templateKey, toAddress, subject, sentOk, error: errorMessage, sentByUserId: adminUser.id, sentByName: adminUser.name || adminUser.email,
+      });
+      audit.logEvent({ actorUserId: adminUser.id, actorEmail: adminUser.email, actorRole: 'admin', action: 'admin_send_email', caseId: targetCaseId, detail: `${templateKey}${sentOk ? '' : ' (failed)'}`, ip });
+
+      if (!sentOk) return sendError(res, 502, errorMessage || 'Could not send email');
+      return sendJson(res, 200, { email: logEntry });
+    }
+
+    const adminProposalMatch = pathname.match(/^\/api\/admin\/cases\/([a-f0-9]+)\/proposal$/);
+    if (adminProposalMatch && req.method === 'GET') {
+      const targetCaseId = adminProposalMatch[1];
+      const bundle = caseData.getFullCase(targetCaseId);
+      if (!bundle.case) return sendError(res, 404, 'Case not found');
+      audit.logEvent({ actorUserId: adminUser.id, actorEmail: adminUser.email, actorRole: 'admin', action: 'admin_generate_proposal', caseId: targetCaseId, ip });
+      const html = proposal.generateProposalHtml(bundle);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      return res.end(html);
     }
 
     return sendError(res, 404, 'Not found');
