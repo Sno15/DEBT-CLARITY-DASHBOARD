@@ -39,6 +39,12 @@ database as they go.
   reminder email to the client with one click. Nothing is ever sent automatically or
   on a schedule — every email is a deliberate choice by an adviser, and every attempt
   (sent or failed) is logged on the case. See "Setting up email sending" below.
+- **Client assistant chatbot** — a "Need help?" chat button in the client dashboard
+  answers questions about using the dashboard and general debt-solution concepts. It's
+  deliberately scoped to never recommend a specific solution or give figures specific
+  to a client's case — anything that strays there gets a "please check with your
+  adviser" answer instead, and is automatically logged as a case note so advisers see
+  what was asked. See "Setting up the client assistant" below.
 
 ## Setting up your own advisor login
 
@@ -114,6 +120,56 @@ buttons on a case's page will send real emails and log the result underneath. If
 something's wrong (wrong password, unverified sender, etc.) the attempt will fail with
 a clear error message shown right there, and it's recorded in the case's email history
 so you can see exactly what happened and when.
+
+## Setting up the client assistant
+
+The "Need help?" chat button clients see in their dashboard needs its own AI
+service credential to actually answer anything — without it, the button still shows
+up but replies with a clear "not switched on yet" message instead of chatting.
+
+Unlike the SMTP email feature, this isn't affected by Render's free-plan network
+restrictions — that restriction is specific to email ports, not general web traffic,
+so the assistant works the same on the free plan as on a paid one.
+
+**1. Get an API key**:
+- Go to console.anthropic.com and sign in (or create an account) — this is a
+  separate, pay-as-you-go account from any Claude.ai subscription you might already
+  have; the two aren't linked.
+- Go to **API Keys** and create a new key. Copy it somewhere safe immediately, the
+  same way as the Brevo SMTP key above — it's shown in full only once.
+- Add a small amount of credit to the account under **Billing** (a few pounds goes a
+  very long way at the volume a small firm's clients would generate — each chat
+  message costs a small fraction of a penny with the low-cost model this app uses by
+  default).
+
+**2. Add the environment variable**:
+
+On Render, add this on the service's Environment tab (already listed in
+`render.yaml`, marked "sync: false"):
+
+```
+ANTHROPIC_API_KEY=<the key you just created>
+```
+
+`ANTHROPIC_MODEL` can be left blank — it defaults to a fast, low-cost model. Only set
+it if you specifically want to switch to a different one later.
+
+Running locally, set it the same way as the other variables above, e.g. on
+Windows PowerShell:
+
+```powershell
+$env:ANTHROPIC_API_KEY="..."; node server/app.js
+```
+
+**3. Test it**: log in as a client, click "Need help?" in the bottom-right corner,
+and ask something like "what documents do I need to upload?". If you ask something
+outside its scope — like "which solution should I pick?" — it'll decline to give a
+personal recommendation and point you to your adviser instead, and that exchange will
+show up as a case note on that client's case for whoever's reviewing it.
+
+**A note on cost control**: each client is limited to 30 messages per 10 minutes as a
+safety net against runaway usage (accidental or otherwise) — this is generous for
+normal use but caps what a single misbehaving script or bot could rack up in charges.
 
 ## Tech choices — and why there are zero npm dependencies
 
@@ -246,6 +302,7 @@ server/
   mailer.js           — hand-rolled SMTP client used to actually send emails
   email-templates.js  — copy for the thank-you/reminder emails
   firm-config.js       — shared firm display name (used by proposal.js and mailer.js)
+  ai-assistant.js      — calls the Anthropic API for the client assistant chatbot
 public/
   index.html        — single HTML shell
   css/styles.css    — all styling
@@ -256,8 +313,10 @@ test/
   e2e-admin.js         — Playwright walkthrough of the admin/advisor view
   e2e-security-ui.js   — Playwright walkthrough of Privacy/Data and admin export/delete/audit log
   e2e-comms.js         — Playwright walkthrough of the manual email-sending buttons
+  e2e-assistant.js     — Playwright walkthrough of the client assistant chatbot
   mock-smtp-test.js    — unit test for mailer.js's SMTP conversation, no real network needed
   mock-smtp-server.js  — a throwaway local SMTP server for manual testing
+  ai-assistant-test.js — unit test for the chatbot's reply-parsing and request-building logic
 ```
 
 ## Extending it

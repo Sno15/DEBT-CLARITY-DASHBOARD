@@ -1,7 +1,10 @@
 'use strict';
 
 /* ============================== State ============================== */
-const STATE = { user: null, bundle: null, route: 'overview', ieTab: 'income' };
+const STATE = {
+  user: null, bundle: null, route: 'overview', ieTab: 'income',
+  assistantHistory: [], assistantOpen: false,
+};
 
 const BUNDLE_KEY = {
   dependants: 'dependants', creditors: 'creditors', properties: 'properties',
@@ -180,9 +183,98 @@ function renderApp() {
         <div class="content" id="content"></div>
       </div>
     </div>
+    <div id="assistant-widget-container">${assistantWidgetHtml()}</div>
   `;
   document.getElementById('logout-btn').addEventListener('click', logout);
+  wireAssistantWidget();
   renderRoute();
+}
+
+/* ============================== Client assistant (chatbot) widget ============================== */
+function assistantWidgetHtml() {
+  const open = STATE.assistantOpen;
+  const history = STATE.assistantHistory || [];
+  const messagesHtml = history.map((m) => `
+    <div class="assistant-msg assistant-msg-${m.role}">${escapeHtml(m.content)}</div>
+  `).join('');
+  return `
+    <div class="assistant-widget ${open ? 'open' : ''}">
+      ${open ? `
+        <div class="assistant-panel">
+          <div class="assistant-panel-header">
+            <strong>Debt Clarity Assistant</strong>
+            <button type="button" id="assistant-close-btn" class="btn-icon" title="Close">✕</button>
+          </div>
+          <div class="assistant-disclaimer">General guidance only — not personal advice. Your adviser confirms anything specific to your case.</div>
+          <div class="assistant-messages" id="assistant-messages">
+            ${history.length ? messagesHtml : '<div class="assistant-msg assistant-msg-assistant">Hi! Ask me anything about using your dashboard, or about debt solutions in general.</div>'}
+          </div>
+          <form id="assistant-form" class="assistant-input-row">
+            <input type="text" id="assistant-input" placeholder="Type a question…" autocomplete="off" />
+            <button type="submit" class="btn btn-primary" id="assistant-send-btn">Send</button>
+          </form>
+        </div>
+      ` : `<button type="button" id="assistant-toggle-btn" class="assistant-fab">💬 Need help?</button>`}
+    </div>
+  `;
+}
+
+function rerenderAssistantWidget() {
+  const container = document.getElementById('assistant-widget-container');
+  if (!container) return;
+  container.innerHTML = assistantWidgetHtml();
+  wireAssistantWidget();
+}
+
+function scrollAssistantToBottom() {
+  const el = document.getElementById('assistant-messages');
+  if (el) el.scrollTop = el.scrollHeight;
+}
+
+function wireAssistantWidget() {
+  const toggleBtn = document.getElementById('assistant-toggle-btn');
+  if (toggleBtn) {
+    toggleBtn.addEventListener('click', () => {
+      STATE.assistantOpen = true;
+      rerenderAssistantWidget();
+      scrollAssistantToBottom();
+      const input = document.getElementById('assistant-input');
+      if (input) input.focus();
+    });
+  }
+
+  const closeBtn = document.getElementById('assistant-close-btn');
+  if (closeBtn) {
+    closeBtn.addEventListener('click', () => {
+      STATE.assistantOpen = false;
+      rerenderAssistantWidget();
+    });
+  }
+
+  const form = document.getElementById('assistant-form');
+  if (form) {
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const input = document.getElementById('assistant-input');
+      const message = input.value.trim();
+      if (!message) return;
+      const priorHistory = STATE.assistantHistory.slice();
+      STATE.assistantHistory.push({ role: 'user', content: message });
+      input.value = '';
+      rerenderAssistantWidget();
+      scrollAssistantToBottom();
+      try {
+        const result = await api('/api/case/assistant', { method: 'POST', body: { message, history: priorHistory } });
+        STATE.assistantHistory.push({ role: 'assistant', content: result.reply });
+      } catch (err) {
+        STATE.assistantHistory.push({ role: 'assistant', content: err.message || 'Sorry, something went wrong. Please try again, or contact your adviser directly.' });
+      }
+      rerenderAssistantWidget();
+      scrollAssistantToBottom();
+    });
+  }
+
+  scrollAssistantToBottom();
 }
 
 function stepper(activeKey) {

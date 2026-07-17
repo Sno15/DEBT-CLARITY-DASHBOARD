@@ -109,4 +109,6 @@ const TEMPLATES = {
   reminder: { label: 'Reminder to continue', build: buildReminderEmail },
 };
 
-module.exports = { TEMPLATES, buildThankYouEmail, buildReminderEmail };
+module.exports = {
+  TEMPLATES, buildThankYouEmail, buildReminderEmail, incompleteSectionLabels, missingDocumentLabels, SECTION_LABELS,
+};

@@ -26,7 +26,19 @@ services:
         sync: false
       - key: MAIL_FROM_NAME
         sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: ANTHROPIC_MODEL
+        sync: false
 
+# ANTHROPIC_API_KEY / ANTHROPIC_MODEL: powers the "Need help?" chat assistant
+# clients see in their dashboard. Get a key from console.anthropic.com (see
+# the README's "Setting up the client assistant" section) — this is billed
+# separately, pay-as-you-go, from any Claude.ai subscription. Leave blank if
+# you don't want the assistant yet — it'll show a clear "not switched on"
+# message instead of failing. ANTHROPIC_MODEL is optional; leave it blank to
+# use a sensible low-cost default.
+#
 # SMTP_HOST / SMTP_PORT / SMTP_USER / SMTP_PASS / MAIL_FROM_ADDRESS /
 # MAIL_FROM_NAME: needed for the "Send thank-you email" / "Send reminder"
 # buttons on a case's admin page to actually deliver anything. SMTP_HOST and

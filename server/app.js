@@ -20,6 +20,8 @@ const audit = require('./audit');
 const proposal = require('./proposal');
 const mailer = require('./mailer');
 const emailTemplates = require('./email-templates');
+const aiAssistant = require('./ai-assistant');
+const { SOLUTIONS } = require(path.join(__dirname, '..', 'public', 'js', 'config.js'));
 const { maybeBootstrapAdminFromEnv } = require('./admin-setup');
 
 const PORT = process.env.PORT || 3000;
@@ -396,6 +398,46 @@ async function handleApi(req, res, pathname, query, ip) {
     const solution = caseData.setSolution(caseId, body.solutionType);
     audit.logEvent({ actorUserId: user.id, actorEmail: user.email, actorRole: 'client', action: 'choose_solution', caseId, detail: body.solutionType, ip });
     return sendJson(res, 200, { solution, completion: caseData.computeCompletion(caseId) });
+  }
+
+  // ---------- Client assistant (chatbot) ----------
+  if (pathname === '/api/case/assistant' && req.method === 'POST') {
+    if (!security.rateLimit(ip, 'assistant', 30, 10 * 60 * 1000)) {
+      return sendError(res, 429, 'Too many messages — please wait a few minutes and try again.');
+    }
+    const body = await readJsonBody(req);
+    const message = (body.message || '').trim();
+    if (!message) return sendError(res, 400, 'Message is required');
+    if (message.length > 2000) return sendError(res, 400, 'Message is too long (max 2000 characters)');
+    const history = Array.isArray(body.history) ? body.history.slice(-20) : [];
+
+    const bundle = caseData.getFullCase(caseId);
+    const solutionChosen = bundle.solution
+      ? (SOLUTIONS.find((s) => s.key === bundle.solution.solutionType) || {}).name || bundle.solution.solutionType
+      : null;
+
+    let result;
+    try {
+      result = await aiAssistant.askAssistant({
+        message,
+        history,
+        context: {
+          firstName: (bundle.personal && bundle.personal.first_name) || null,
+          missingSections: emailTemplates.incompleteSectionLabels(bundle),
+          solutionChosen,
+          missingDocs: emailTemplates.missingDocumentLabels(bundle),
+        },
+      });
+    } catch (err) {
+      audit.logEvent({ actorUserId: user.id, actorEmail: user.email, actorRole: 'client', action: 'assistant_error', caseId, detail: err.message, ip });
+      return sendError(res, 502, 'The assistant is temporarily unavailable — please try again shortly, or contact your adviser.');
+    }
+
+    if (result.flagged) {
+      caseData.addCaseNote(caseId, null, 'Client Assistant', `Client asked something worth following up on (${result.flagTopic}): "${message}"`);
+    }
+    audit.logEvent({ actorUserId: user.id, actorEmail: user.email, actorRole: 'client', action: 'assistant_message', caseId, detail: result.flagged ? `flagged: ${result.flagTopic}` : 'ok', ip });
+    return sendJson(res, 200, { reply: result.reply, flagged: result.flagged });
   }
 
   // ---------- Documents ----------
